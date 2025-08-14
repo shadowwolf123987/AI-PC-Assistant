@@ -1,0 +1,8 @@
+#Ignores ENV file
+.env
+
+#Ignores Random VS files
+/.vs/Shadow AI Assistant
+/Shadow AI Assistant.pyproj
+/Shadow AI Assistant.pyproj.user
+/Shadow AI Assistant.sln
