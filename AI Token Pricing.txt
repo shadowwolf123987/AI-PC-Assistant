@@ -1,6 +1,0 @@
-50,000 tokens per request
-4o mini
-$0.60 / 1M input tokens
-£0.44 / 1M tokens
-
-50,000 = £0.022 per request
