@@ -6,6 +6,7 @@ import os
 import io
 import json
 import base64
+import random
 import time
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
@@ -17,6 +18,9 @@ from openai import OpenAI
 from elevenlabs import ElevenLabs
 from elevenlabs import play, save, stream, Voice, VoiceSettings
 import pydub, ffmpeg
+import speech_recognition as sr
+from pydub import AudioSegment
+from pydub.playback import play as pydub_play
 
 # File Paths
 ffmpegPath = r"libs/ffmpeg/bin/"
@@ -37,7 +41,35 @@ elevenlabs = ElevenLabs(
 
 pydub.AudioSegment.converter = ffmpegPath + "ffmpeg.exe"
 
+recognizer = sr.Recognizer()
+
 #Function Defs
+
+def userSetup():
+    return
+
+def keywordTrigger(text):
+    keywords = char["trigger_words"]
+    keywords = keywords.split(",")
+
+    text = text.lower()
+
+    for keyword in keywords:
+        keyword = keyword.lower().strip()
+
+        if "&" in keyword:
+            state = True
+            reqKeys = keyword.split("&") #used to ignore punctuation EG: zero&two , Zero, two = same
+            for reqKey in reqKeys:
+                if reqKey not in text:
+                    state = False
+            if state == True:
+                return True
+
+        if keyword in text:
+            return True
+
+    return False
 
 def screenshot():
     #Take Screenshot
@@ -101,17 +133,17 @@ def compareFrame(frame, prevFrame, binNum=32, histRange=[0,256], threshold=0.40)
     # Return True if difference is big enough
     return dist > threshold, float(dist)
 
-def sendToAI(img):
+def sendToAI(img, text=None):
 
     sysMessage = f"""
 
 You are an AI Companion that receives screenshots of a pc screen and based on those screenshots, you should talk to the player using the details from the screenshot or just make general small talk where suitable
 
-Your answers should be short (20 words maximum), you should ignore background details and focus on the features that stand out. Dont repeat yourself 
+Your answers should be short (30 words maximum), you should provide unique, personal conversation using the screenshot attached as context 
 
 You should speak based on the personality info below:
 
-{char["ai_description"]}
+{char["ai_settings"]["ai_description"]}
 
 """
 
@@ -122,23 +154,20 @@ You should speak based on the personality info below:
     b64 = base64.b64encode(buffer.getvalue()).decode("ascii")
     b64Url = f"data:image/jpeg;base64,{b64}"
 
+    msgs = [
+        {"role": "system", "content": [{"type": "input_text", "text": sysMessage}]},
+        {"role": "user", "content": [{ "type": "input_image", "image_url": b64Url} ]},
+    ]
+
+    if text is not None:
+        msgs.append({"role": "user", "content": [{"type": "input_text", "text": text}] } )
+
     response = client.responses.create(
         model="gpt-4o-mini",
-        input=[
-            {
-                "role": "system",
-                "content": [{"type": "input_text", "text": sysMessage}]
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "input_image",
-                        "image_url": b64Url
-                    }
-                ]
-            }
-        ]
+        input=msgs,
+
+        temperature= int(char["ai_settings"]["temperature"]),
+        top_p= int(char["ai_settings"]["top_p"])
     )
 
     text = response.output_text
@@ -152,6 +181,35 @@ def loadCharacterProfile(charName="zero-two"):
     global char
     with open(charPath, "r", encoding="utf-8") as file:
         char = json.load(file)
+
+def transcribe(audio):
+
+    wav_bytes = audio.get_wav_data(convert_rate=16000, convert_width=2)
+    wav = io.BytesIO(wav_bytes)
+    wav.name = "speech.wav"
+    wav.seek(0)
+
+    #play(wav)
+
+    """
+    #OpenAI Whispers Transcription
+    transcription = client.audio.transcriptions.create(
+        model="gpt-4o-transcribe", 
+        file=wav,
+        prompt=f"Each transcription should start with FALSE:text or TRUE:text if any of these {char['trigger_words']} are detected. The audio is in English, and should be translated in its raw form as accurately as possible."
+    )
+    """
+
+    # ElevenLabs Transcription
+    transcription = elevenlabs.speech_to_text.convert(
+        file=wav,
+        model_id="scribe_v1", # Transcription Model
+        tag_audio_events=True, # Tag audio events like laughter, applause, etc.
+        language_code="en", # Language of the audio file. If set to None, the model will detect the language automatically.
+        diarize=False, # Whether to annotate who is speaking
+    )
+
+    return transcription.text
 
 def speak(text):
 
@@ -168,11 +226,20 @@ def speak(text):
         },
     )
 
-    play(audio)
+    #Splits generator object into bytes
+    audio_bytes = b"".join(audio)
 
-    return audio
+    # Load bytes into AudioSegment
+    audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes), format="mp3")
 
-def main():
+    boosted_audio = audio_segment + int(char["voice_settings"]["db_volume_addition"]) #In dBs, Adds to original volume
+
+    # Play boosted audio
+    pydub_play(boosted_audio)
+
+    return boosted_audio
+
+def cvMain():
     x=0
     preState = 0
     frameLimit = 3 #How Many Frames to Check before allowing a change
@@ -181,7 +248,7 @@ def main():
     #cv.namedWindow("win", cv.WINDOW_NORMAL)
 
     heartbeat = datetime.now() + timedelta(0,60) #Sends screenshot after 60 sec idle time
-    loadCharacterProfile("zero-two")
+    loadCharacterProfile()
     while True:
         img = screenshot()
         analImg = grayscale(img)
@@ -234,4 +301,53 @@ def main():
         prevImg = analImg
         time.sleep(0.2)
 
-main()
+def audioMain():
+
+    loadCharacterProfile()
+    while True:
+        with sr.Microphone() as source:
+            #Adjust for background noise
+            recognizer.dynamic_energy_threshold = True
+            recognizer.energy_threshold = 400  # start point; tune 200–1200
+            recognizer.pause_threshold = 0.65  # How long to wait before ending phrase
+            recognizer.non_speaking_duration = 0.5 # How much sielnce to ignore before recording
+            recognizer.phrase_threshold = 0.15  # require ~150ms of speech to start
+            recognizer.adjust_for_ambient_noise(source, duration=0.8)
+
+            #Start listening
+            print("Recording...")
+
+            recorded_audio = recognizer.listen(source)
+
+            img = screenshot()
+
+            speech = transcribe(recorded_audio)
+
+            if keywordTrigger(speech) == True:
+                print(f"KEY: {speech}")
+                
+                text = sendToAI(img, text=speech)
+
+                speak(text)
+
+            else:
+                print(f"NO KEY: {speech}")
+    return
+
+def main():
+
+    loadCharacterProfile()
+    while True:
+        sleepTime = random.randint(30,60)
+        time.sleep(sleepTime)
+
+        img = screenshot()
+
+        text = sendToAI(img)
+        print(f"{text} \n")
+
+        speak(text)
+
+#cvMain()
+audioMain()
+#main()
