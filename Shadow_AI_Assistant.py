@@ -9,7 +9,9 @@ import base64
 import random
 import time
 from datetime import datetime, timedelta
+from timeit import repeat
 from dotenv import load_dotenv
+import threading
 import pyautogui
 from PIL import Image
 import cv2 as cv
@@ -239,6 +241,7 @@ def speak(text):
 
     return boosted_audio
 
+# Different Implementations for triggering the AI
 def cvMain():
     x=0
     preState = 0
@@ -334,13 +337,13 @@ def audioMain():
                 print(f"NO KEY: {speech}")
     return
 
-def main():
+def timedMain():
 
     loadCharacterProfile()
     while True:
         sleepTime = random.randint(30,60)
         time.sleep(sleepTime)
-
+        print("Main Screenshot Thread")
         img = screenshot()
 
         text = sendToAI(img)
@@ -348,6 +351,10 @@ def main():
 
         speak(text)
 
+# Parallel Threads
+speechThread = threading.Thread(target=audioMain)
+speechThread.start()
+
 #cvMain()
-audioMain()
-#main()
+#audioMain()
+timedMain()
